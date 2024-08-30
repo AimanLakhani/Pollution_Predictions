@@ -1,0 +1,208 @@
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+## Introduction
+
+* 876 rows that are each of a different county in the US. 
+* Models: linear regression, k-nearest neighbors, random forest, decision trees.
+
+```{r}
+#Load libraries
+library(tidyverse)
+library(tidymodels)
+library(kknn)
+library(randomForest)
+library(rpart)
+
+#Load data
+dat <- read_csv("pm25_data.csv.gz")
+```
+
+```{r}
+# Get columns names with correlation > 0.25
+
+# Calculate the correlation coefficients
+cor_vec <- sapply(select(dat, where(is.numeric)), function(x) cor(x, dat$value))
+
+#Get the names of the columns with correlation higher than 0.25.
+high_cor_names <- names(cor_vec)[abs(cor_vec) > 0.25]
+
+high_cor_names
+```
+
+**Target: to get an RMSE of 2 or less.**
+
+## Data Wrangling
+
+```{r}
+# Clean the dataframe
+dat_filtered <- dat |> 
+  select(value,CMAQ,zcta_area,imp_a500,imp_a1000,imp_a5000,imp_a10000,imp_a15000,log_pri_length_25000,log_prisec_length_5000,log_prisec_length_10000,log_prisec_length_15000,log_prisec_length_25000,log_nei_2008_pm25_sum_10000,log_nei_2008_pm25_sum_15000,log_nei_2008_pm25_sum_25000,log_nei_2008_pm10_sum_10000,log_nei_2008_pm10_sum_15000,log_nei_2008_pm10_sum_25000,urc2013,urc2006,aod,lat,lon,state)
+
+# Split data into training and testing sets
+set.seed(322)
+dat_split <- initial_split(dat_filtered, prop = 0.8)
+train <- training(dat_split)
+test <- testing(dat_split)
+```
+
+## Results - modeling
+
+LINEAR REGRESSION ANALYSIS
+
+```{r}
+#Regression 
+fit <- lm(formula = value ~ CMAQ + zcta_area + imp_a500 + imp_a1000 + imp_a5000 + imp_a10000 + imp_a15000 + log_pri_length_25000 + log_prisec_length_5000 + log_prisec_length_10000 + log_prisec_length_15000 + log_prisec_length_25000 + log_nei_2008_pm25_sum_10000 + log_nei_2008_pm25_sum_15000 + log_nei_2008_pm25_sum_25000 + log_nei_2008_pm10_sum_10000 + log_nei_2008_pm10_sum_15000 + log_nei_2008_pm10_sum_25000 + urc2013 + urc2006 + aod, data = train)
+summary(fit)
+
+## predict the values and calculate residsuals
+values <- predict(fit, newdata = test)
+
+# Calculate the residuals
+residuals <- test$value - values
+
+# Get RMSE
+lin_RMSE <- sqrt(mean(residuals^2))
+lin_RMSE
+```
+*RMSE: 2.641683*
+
+K-NEAREST NEIGHBORS ANALYSIS
+
+```{r}
+# Define the KNN model
+knn_spec <- nearest_neighbor(neighbors = 9, weight_func = "rectangular", dist_power = 2) |>
+  set_engine("kknn") |>
+  set_mode("regression")
+
+# Create a recipe for preprocessing
+recipe <- recipe(value ~ CMAQ + zcta_area + imp_a500 + imp_a1000 + imp_a5000 + imp_a10000 + imp_a15000 + log_pri_length_25000 + log_prisec_length_5000 + log_prisec_length_10000 + log_prisec_length_15000 + log_prisec_length_25000 + log_nei_2008_pm25_sum_10000 + log_nei_2008_pm25_sum_15000 + log_nei_2008_pm25_sum_25000 + log_nei_2008_pm10_sum_10000 + log_nei_2008_pm10_sum_15000 + log_nei_2008_pm10_sum_25000 + urc2013 + urc2006 + aod, data = train)
+
+# Define the workflow
+workflow <- workflow() |>
+  add_model(knn_spec) |>
+  add_recipe(recipe)
+
+# Fit the model
+fit_knn <- workflow |> fit(data = train)
+
+# Predict on the test set and calculate residuals
+predictions <- predict(fit_knn, new_data = test) |>
+  bind_cols(test) |>
+  mutate(resid = value - .pred)
+
+# Calculate RMSE
+k_rmse <- sqrt(mean(predictions$resid^2))
+k_rmse
+```
+*RMSE: 2.430612*
+
+DECISION TREES ANALYSIS
+
+```{r}
+# Define the Decision Tree model
+dt_spec <- decision_tree(tree_depth = 10, min_n = 5) |>
+  set_engine("rpart") |>
+  set_mode("regression")
+
+# Create a recipe for preprocessing
+recipe <- recipe(value ~ CMAQ + zcta_area + imp_a500 + imp_a1000 + imp_a5000 + imp_a10000 + imp_a15000 + log_pri_length_25000 + log_prisec_length_5000 + log_prisec_length_10000 + log_prisec_length_15000 + log_prisec_length_25000 + log_nei_2008_pm25_sum_10000 + log_nei_2008_pm25_sum_15000 + log_nei_2008_pm25_sum_25000 + log_nei_2008_pm10_sum_10000 + log_nei_2008_pm10_sum_15000 + log_nei_2008_pm10_sum_25000 + urc2013 + urc2006 + aod, data = train)
+
+# Define the workflow
+workflow <- workflow() |>
+  add_model(dt_spec) |>
+  add_recipe(recipe)
+
+# Fit the model
+fit_dt <- workflow |> fit(data = train)
+
+# Predict on the test set and calculate residuals
+predictions <- predict(fit_dt, new_data = test) |>
+  bind_cols(test) |>
+  mutate(resid = value - .pred)
+
+# Calculate RMSE
+dt_rmse <- sqrt(mean(predictions$resid^2))
+dt_rmse
+```
+*RMSE: 2.780553*
+
+RANDOM FOREST ANALYSIS
+
+```{r}
+set.seed(322)
+
+# Define the Random Forest model
+rf_spec <- rand_forest(trees = 150, mode = "regression") |>
+  set_engine("randomForest") |>
+  set_mode("regression")
+
+# Recipe for preprocessing
+recipe <- recipe(value ~ CMAQ + zcta_area + imp_a500 + imp_a1000 + imp_a5000 + imp_a10000 + imp_a15000 + log_pri_length_25000 + log_prisec_length_5000 + log_prisec_length_10000 + log_prisec_length_15000 + log_prisec_length_25000 + log_nei_2008_pm25_sum_10000 + log_nei_2008_pm25_sum_15000 + log_nei_2008_pm25_sum_25000 + log_nei_2008_pm10_sum_10000 + log_nei_2008_pm10_sum_15000 + log_nei_2008_pm10_sum_25000 + urc2013 + urc2006 + aod, data = train)
+
+# Define the workflow
+workflow <- workflow() |>
+  add_model(rf_spec) |>
+  add_recipe(recipe)
+
+# Fit the model
+fit_rf <- workflow |> fit(data = train)
+
+# Predict on the test set and calculate residuals
+predictions <- predict(fit_rf, new_data = test) |>
+  bind_cols(test) |>
+  mutate(resid = value - .pred)
+
+
+# Calculate RMSE
+rf_rmse <- sqrt(mean(predictions$resid^2))
+rf_rmse
+```
+*RMSE: 2.375692*
+
+
+## Results - Best model
+
+```{r}
+## Random Forest Scatterplot (predicted vs observed values)
+
+ggplot(predictions, aes(x = value, y = .pred)) +
+  geom_point(alpha = 0.5) +  # Adding some transparency to points
+  geom_smooth(method = "lm", se = FALSE, color = "blue") +  # Adds a regression line without confidence envelope
+  labs(x = "Observed Values", y = "Predicted Values", title = "Observed vs. Predicted Values for Random Forests") +
+  theme_minimal() 
+```
+
+```{r}
+# RMSE VALUES TABLE
+
+# Manually created a table with the RMSE values and the name of the method used. 
+rmse_values <- c(lin_RMSE, k_rmse, dt_rmse, rf_rmse)
+model_names <- c("Linear Regression", "K-Nearest Neighbors", "Decision Trees","Random Forests")
+
+rmse_summary <- data.frame(Model = model_names, RMSE = rmse_values)
+rmse_summary
+```
+
+**Based on these results the best model for the data set is Random Forests.**
+
+## Observations
+
+```{r}
+## BEST AND WORST PREDICTIONS
+
+# Sort by the absolute values of residuals to find the best predictions
+predictive_values <- predictions |>
+  arrange(abs(resid))
+ 
+# Sort by location and arrange by residual values. 
+geolocations <- predictive_values |>
+  select(lat, lon, value, .pred, resid,state) |> 
+  arrange(abs(resid))
+
+geolocations
+```
+
+*The regions with the closest predictions are located near the center of the US, except for North Dakota that is up north. They are all smaller states that don't have huge metroplexes and are filled with smaller cities. This means there is less variation in the variables, which leads to better model accuracy. The 5 bottom down are all in California, which makes sense as it is overpopulated and there is a lot of traffic, which means more pollution. Since California is an outlier state in terms of its variables, our model is less accurate when predicting its values. Overall, the model performs best on states without major cities, and more rural populations. On the other hand, the model performs worst on states with big metropolitan cities.*
